@@ -515,6 +515,10 @@ void BaseRealSenseNode::imu_callback(rs2::frame frame)
     publishMetadata(frame, t, OPTICAL_FRAME_ID(stream_index));
 }
 
+bool BaseRealSenseNode::frameHasSubscriber(rs2::frame frame) {
+    stream_index_pair sip(frame.get_profile().stream_type(), frame.get_profile().stream_index());
+    return 0 != _image_publishers[sip]->get_subscription_count();
+}
 
 void BaseRealSenseNode::frame_callback(rs2::frame frame)
 {
@@ -536,7 +540,7 @@ void BaseRealSenseNode::frame_callback(rs2::frame frame)
     {
         ROS_DEBUG("Frameset arrived.");
         auto frameset = frame.as<rs2::frameset>();
-        ROS_DEBUG("List of frameset before applying filters: size: %d", static_cast<int>(frameset.size()));
+        ROS_INFO("List of frameset before applying filters: size: %d", static_cast<int>(frameset.size()));
         for (auto it = frameset.begin(); it != frameset.end(); ++it)
         {
             auto f = (*it);
@@ -544,25 +548,24 @@ void BaseRealSenseNode::frame_callback(rs2::frame frame)
             auto stream_index = f.get_profile().stream_index();
             auto stream_format = f.get_profile().format();
             auto stream_unique_id = f.get_profile().unique_id();
-
-            ROS_DEBUG("Frameset contain (%s, %d, %s %d) frame. frame_number: %llu ; frame_TS: %f ; ros_TS(NSec): %lu",
-                        rs2_stream_to_string(stream_type), stream_index, rs2_format_to_string(stream_format), stream_unique_id, frame.get_frame_number(), frame_time, t.nanoseconds());
         }
         // Clip depth_frame for max range:
         rs2::depth_frame original_depth_frame = frameset.get_depth_frame();
-        if (original_depth_frame && _clipping_distance > 0)
-        {
-            clip_depth(original_depth_frame, _clipping_distance);
+        if (frameHasSubscriber(original_depth_frame)) {
+            if (original_depth_frame && _clipping_distance > 0)
+            {
+                clip_depth(original_depth_frame, _clipping_distance);
+            }
         }
-
         rs2::video_frame original_color_frame = frameset.get_color_frame();
 
         ROS_DEBUG("num_filters: %d", static_cast<int>(_filters.size()));
-        for (auto filter_it : _filters)
-        {
-            frameset = filter_it->Process(frameset);
+        if (frameHasSubscriber(frameset)) {
+            for (auto filter_it : _filters)
+            {
+                frameset = filter_it->Process(frameset);
+            }
         }
-
         ROS_DEBUG("List of frameset after applying filters: size: %d", static_cast<int>(frameset.size()));
         bool sent_depth_frame(false);
         for (auto it = frameset.begin(); it != frameset.end(); ++it)
@@ -572,7 +575,10 @@ void BaseRealSenseNode::frame_callback(rs2::frame frame)
             auto stream_index = f.get_profile().stream_index();
             auto stream_format = f.get_profile().format();
             stream_index_pair sip{stream_type,stream_index};
-
+            
+            if (!frameHasSubscriber(f)) {
+                continue;
+            }
             ROS_DEBUG("Frameset contain (%s, %d, %s) frame. frame_number: %llu ; frame_TS: %f ; ros_TS(NSec): %lu", 
                 rs2_stream_to_string(stream_type), stream_index, rs2_format_to_string(stream_format), f.get_frame_number(), frame_time, t.nanoseconds());
             if (f.is<rs2::video_frame>())
@@ -599,21 +605,23 @@ void BaseRealSenseNode::frame_callback(rs2::frame frame)
         }
         if (original_depth_frame && _align_depth_filter->is_enabled())
         {
-            rs2::frame frame_to_send;
-            if (_colorizer_filter->is_enabled())
-                frame_to_send = _colorizer_filter->Process(original_depth_frame);
-            else
-                frame_to_send = original_depth_frame;
-            publishFrame(frame_to_send, t, DEPTH, _images, _info_publishers, _image_publishers);
+            if (frameHasSubscriber(original_depth_frame)) {
+                rs2::frame frame_to_send;
+                if (_colorizer_filter->is_enabled())
+                    frame_to_send = _colorizer_filter->Process(original_depth_frame);
+                else
+                    frame_to_send = original_depth_frame;
+                publishFrame(frame_to_send, t, DEPTH, _images, _info_publishers, _image_publishers);
 
-            // Publish RGBD only if rgbd enabled and both depth and color frames exist.
-            // On this line we already know original_depth_frame is valid.
-            if(_enable_rgbd && original_color_frame)
-            {
-                auto color_format = original_color_frame.get_profile().format();
-                auto depth_format = original_depth_frame.get_profile().format();
-                publishRGBD(_images[COLOR], color_format, _depth_aligned_image[COLOR], depth_format, t);
-            }  
+                // Publish RGBD only if rgbd enabled and both depth and color frames exist.
+                // On this line we already know original_depth_frame is valid.
+                if(_enable_rgbd && original_color_frame)
+                {
+                    auto color_format = original_color_frame.get_profile().format();
+                    auto depth_format = original_depth_frame.get_profile().format();
+                    publishRGBD(_images[COLOR], color_format, _depth_aligned_image[COLOR], depth_format, t);
+                }
+            } 
         }
     }
     else if (frame.is<rs2::video_frame>())
@@ -622,19 +630,22 @@ void BaseRealSenseNode::frame_callback(rs2::frame frame)
         auto stream_index = frame.get_profile().stream_index();
         ROS_DEBUG("Single video frame arrived (%s, %d). frame_number: %llu ; frame_TS: %f ; ros_TS(NSec): %lu",
                     rs2_stream_to_string(stream_type), stream_index, frame.get_frame_number(), frame_time, t.nanoseconds());
-            
+        
         stream_index_pair sip{stream_type,stream_index};
-        if (frame.is<rs2::depth_frame>())
-        {
-            if (_clipping_distance > 0)
+        if (frameHasSubscriber(frame)) {
+            if (frame.is<rs2::depth_frame>())
             {
-                clip_depth(frame, _clipping_distance);
+                if (_clipping_distance > 0)
+                {
+                    clip_depth(frame, _clipping_distance);
+                }
             }
-        }
-        publishFrame(frame, t, sip, _images, _info_publishers, _image_publishers);
+            publishFrame(frame, t, sip, _images, _info_publishers, _image_publishers);
      }
-     if (_synced_imu_publisher)
-        _synced_imu_publisher->Resume();
+        if (_synced_imu_publisher)
+            _synced_imu_publisher->Resume();
+        }
+    }
 } // frame_callback
 
 void BaseRealSenseNode::multiple_message_callback(rs2::frame frame, imu_sync_method sync_method)
