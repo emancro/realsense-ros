@@ -49,7 +49,8 @@ class image_transport_publisher : public image_publisher
 public:
     image_transport_publisher( rclcpp::Node & node,
                                const std::string & topic_name,
-                               const rmw_qos_profile_t & qos );
+                               const rmw_qos_profile_t & qos,
+                               bool enable_shm = false );
     void publish( sensor_msgs::msg::Image::UniquePtr image_ptr ) override;
     size_t get_subscription_count() const override;
 
@@ -57,6 +58,7 @@ private:
     std::shared_ptr< image_transport::Publisher > image_publisher_impl;
     std::unique_ptr<SharedMem> img_shared_mem;
     std::unique_ptr<SharedMem> rw_shared_mem;
+    bool _enable_shm;
 };
 
 }  // namespace realsense2_camera

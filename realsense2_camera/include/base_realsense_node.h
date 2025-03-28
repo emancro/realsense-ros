@@ -342,6 +342,7 @@ namespace realsense2_camera
         std::vector<std::shared_ptr<NamedFilter>> _filters;
         std::vector<rs2::sensor> _dev_sensors;
         std::vector<std::unique_ptr<RosSensor>> _available_ros_sensors;
+        bool _enable_shm;
 
         std::map<rs2_stream, std::shared_ptr<rs2::align>> _align;
 

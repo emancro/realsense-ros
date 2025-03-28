@@ -40,58 +40,64 @@ size_t image_rcl_publisher::get_subscription_count() const
 // --- image_transport_publisher implementation ---
 image_transport_publisher::image_transport_publisher( rclcpp::Node & node,
                                                       const std::string & topic_name,
-                                                      const rmw_qos_profile_t & qos )
+                                                      const rmw_qos_profile_t & qos,
+                                                      bool enable_shm )
+    : _enable_shm(enable_shm)
 {
     image_publisher_impl = std::make_shared< image_transport::Publisher >(
         image_transport::create_publisher( &node, topic_name, qos ) );
 }
 void image_transport_publisher::publish( sensor_msgs::msg::Image::UniquePtr image_ptr )
 {
-    bool can_read = true;
-    if ( !img_shared_mem )
+    std::cout << "enable shm: " << _enable_shm << std::endl;
+    if (_enable_shm)
     {
-        std::string topic = image_publisher_impl.get()->getTopic();
-        std::cout << "topic: " << topic << std::endl;
-        topic = topic.substr(1);  // Remove leading '/'
-        std::istringstream stream(topic);
-        std::string segment;
-        std::vector<std::string> words;
+        bool can_read = true;
+        if ( !img_shared_mem )
+        {
+            std::string topic = image_publisher_impl.get()->getTopic();
+            std::cout << "topic: " << topic << std::endl;
+            topic = topic.substr(1);  // Remove leading '/'
+            std::istringstream stream(topic);
+            std::string segment;
+            std::vector<std::string> words;
 
-        // Split the string by '/'
-        while (std::getline(stream, segment, '/')) {
-            words.push_back(segment);
+            // Split the string by '/'
+            while (std::getline(stream, segment, '/')) {
+                words.push_back(segment);
+            }
+            std::string camera_location = words[1];
+            std::string stream_type = words[2];
+            auto msg = image_ptr.get();
+            int img_size;
+            if(msg->encoding == "mono8"){
+                img_size = msg->width * msg->height * 1;
+            }else if (msg->encoding == "bgr8"){
+                img_size = msg->width * msg->height * 3;
+            }else if (msg->encoding == "rgb8"){
+                img_size = msg->width * msg->height * 3;
+            }else if (msg->encoding == "rgba8"){
+                img_size = msg->width * msg->height * 4;
+            }else if (msg->encoding == "bgra8"){
+                img_size = msg->width * msg->height * 4;
+            }else if (msg->encoding == "mono16"){
+                img_size = msg->width * msg->height * 2;
+            }else if (msg->encoding == "16UC1"){
+                img_size = msg->width * msg->height * 2;
+            }
+            std::string img_shm_name = stream_type + std::string("_") + camera_location;
+            std::string rw_img_shm_name = img_shm_name + std::string("_rw");
+            img_shared_mem = std::make_unique<SharedMem>(img_shm_name.c_str(), img_size, true);
+            // rw_shared_mem = std::make_unique<SharedMem>(rw_img_shm_name.c_str(), sizeof(bool), true);
         }
-        std::string camera_location = words[1];
-        std::string stream_type = words[2];
-        auto msg = image_ptr.get();
-        int img_size;
-        if(msg->encoding == "mono8"){
-            img_size = msg->width * msg->height * 1;
-          }else if (msg->encoding == "bgr8"){
-            img_size = msg->width * msg->height * 3;
-          }else if (msg->encoding == "rgb8"){
-            img_size = msg->width * msg->height * 3;
-          }else if (msg->encoding == "rgba8"){
-            img_size = msg->width * msg->height * 4;
-          }else if (msg->encoding == "bgra8"){
-            img_size = msg->width * msg->height * 4;
-          }else if (msg->encoding == "mono16"){
-            img_size = msg->width * msg->height * 2;
-          }else if (msg->encoding == "16UC1"){
-            img_size = msg->width * msg->height * 2;
-          }
-        std::string img_shm_name = stream_type + std::string("_") + camera_location;
-        std::string rw_img_shm_name = img_shm_name + std::string("_rw");
-        img_shared_mem = std::make_unique<SharedMem>(img_shm_name.c_str(), img_size, true);
-        // rw_shared_mem = std::make_unique<SharedMem>(rw_img_shm_name.c_str(), sizeof(bool), true);
-        
+        // can_read = !can_read;
+        // memcpy(rw_shared_mem->data(), &can_read, sizeof(can_read)); // Signal that write is occuring
+        memcpy(img_shared_mem->data(), image_ptr->data.data(), img_shared_mem->size());
+        std::string shm_frame = std::string("--shm--") + img_shared_mem->name();
+        image_ptr->header.frame_id = shm_frame;
+        image_ptr->data.clear();
     }
-    // can_read = !can_read;
-    // memcpy(rw_shared_mem->data(), &can_read, sizeof(can_read)); // Signal that write is occuring
-    memcpy(img_shared_mem->data(), image_ptr->data.data(), img_shared_mem->size());
-    std::string shm_frame = std::string("--shm--") + img_shared_mem->name();
-    image_ptr->header.frame_id = shm_frame;
-    image_ptr->data.clear();
+    
     image_publisher_impl->publish( *image_ptr );
     // can_read = !can_read;
     // memcpy(rw_shared_mem->data(), &can_read, sizeof(can_read)); // Signal that write is finished
