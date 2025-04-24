@@ -116,6 +116,9 @@ def launch_setup(context, params, param_name_suffix=''):
             output=_output,
             arguments=['--ros-args', '--log-level', LaunchConfiguration('log_level' + param_name_suffix)],
             emulate_tty=True,
+            remappings=[
+                ('/camera/camera/color/image_rect_raw', '/camera/camera/color/image_raw'),
+            ],
             )
     ]
 
