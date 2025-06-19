@@ -73,12 +73,12 @@ rs2::frame NamedFilter::Process(rs2::frame frame)
 }
 
 
-PointcloudFilter::PointcloudFilter(std::shared_ptr<rs2::filter> filter, rclcpp::Node& node, std::shared_ptr<Parameters> parameters, rclcpp::Logger logger, bool is_enabled):
+PointcloudFilter::PointcloudFilter(std::shared_ptr<rs2::filter> filter, rclcpp::Node& node, std::shared_ptr<Parameters> parameters, rclcpp::Logger logger, bool is_enabled, bool enable_shm):
     NamedFilter(filter, parameters, logger, is_enabled, false),
     _node(node),
     _allow_no_texture_points(ALLOW_NO_TEXTURE_POINTS),
     _ordered_pc(ORDERED_PC),
-    // _enable_shm(enable_shm),
+    _enable_shm(enable_shm),
     _pc_shared_mem(nullptr)
     {
         setParameters();
@@ -127,10 +127,21 @@ void PointcloudFilter::setPublisher()
         _pointcloud_publisher = _node.create_publisher<sensor_msgs::msg::PointCloud2>("~/depth/color/points",
                                 rclcpp::QoS(rclcpp::QoSInitialization::from_rmw(qos_string_to_qos(_pointcloud_qos)),
                                             qos_string_to_qos(_pointcloud_qos)));
+        
+        // if (_enable_shm)
+        // {
+        _pointcloud_publisher_shm = _node.create_publisher<sensor_msgs::msg::PointCloud2>("~/depth/color/points_shm",
+                                rclcpp::QoS(rclcpp::QoSInitialization::from_rmw(qos_string_to_qos(_pointcloud_qos)),
+                                            qos_string_to_qos(_pointcloud_qos)));
+        // }
     }
     else if ((!_is_enabled) && (_pointcloud_publisher))
     {
         _pointcloud_publisher.reset();
+        // if (_pointcloud_publisher_shm)
+        // {
+        _pointcloud_publisher_shm.reset();
+        // }
     }
 }
 
@@ -143,12 +154,25 @@ void reverse_memcpy(unsigned char* dst, const unsigned char* src, size_t n)
 
 }
 
-void PointcloudFilter::Publish(rs2::points pc, const rclcpp::Time& t, const rs2::frameset& frameset, const std::string& frame_id)
+void PointcloudFilter::Publish(rs2::points pc, const rclcpp::Time& t, const rs2::frameset& frameset, const std::string& frame_id, bool is_shm)
 {
+    std::lock_guard<std::mutex> lock_guard(_mutex_publisher);
+    
+    // Check which publisher to use and if it has subscribers
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr target_publisher;
+    if (is_shm)
     {
-        std::lock_guard<std::mutex> lock_guard(_mutex_publisher);
-        if ((!_pointcloud_publisher) || (!(_pointcloud_publisher->get_subscription_count())))
-            return;
+        target_publisher = _pointcloud_publisher_shm;
+    }
+    else
+    {
+        target_publisher = _pointcloud_publisher;
+    }
+    
+    if (!target_publisher || !target_publisher->get_subscription_count())
+        return;
+
+    {
     }
     rs2_stream texture_source_id = static_cast<rs2_stream>(_filter->get_option(rs2_option::RS2_OPTION_STREAM_FILTER));
     bool use_texture = texture_source_id != RS2_STREAM_ANY;
@@ -276,39 +300,38 @@ void PointcloudFilter::Publish(rs2::points pc, const rclcpp::Time& t, const rs2:
     }
     msg_pointcloud->header.stamp = t;
     
-    // Use shared memory if enabled
-    // if (_enable_shm)
-    // {
-    std::string pc_shm_name = "pc_" + frame_id.substr(frame_id.find_last_of('/') + 1);  // Extract camera name from frame_id
-    
-    // Calculate total size of PointCloud2 data
-    size_t total_pc_size = msg_pointcloud->data.size();
-    
-    // Initialize shared memory if not already created
-    if (!_pc_shared_mem)
+    if (is_shm)
     {
-        std::cout << "Creating PointCloud shared memory: " << pc_shm_name << " with size " << total_pc_size << " bytes" << std::endl;
-        _pc_shared_mem = std::make_unique<SharedMem>(pc_shm_name.c_str(), total_pc_size, true);
+        std::string pc_shm_name = "pc_" + frame_id.substr(frame_id.find_last_of('/') + 1);  // Extract camera name from frame_id
+        
+        // Calculate total size of PointCloud2 data
+        size_t total_pc_size = msg_pointcloud->data.size();
+        
+        // Initialize shared memory if not already created
+        if (!_pc_shared_mem)
+        {
+            std::cout << "Creating PointCloud shared memory: " << pc_shm_name << " with size " << total_pc_size << " bytes" << std::endl;
+            _pc_shared_mem = std::make_unique<SharedMem>(pc_shm_name.c_str(), total_pc_size, true);
+        }
+        else if (_pc_shared_mem->size() < total_pc_size)
+        {
+            // If the size of the pointcloud has changed and is larger than the shared memory, recreate it
+            _pc_shared_mem.reset();
+            std::cout << "Recreating PointCloud shared memory: " << pc_shm_name << " with new size " << total_pc_size << " bytes" << std::endl;
+            _pc_shared_mem = std::make_unique<SharedMem>(pc_shm_name.c_str(), total_pc_size, true);
+        }
+        
+        // Copy data to shared memory
+        memcpy(_pc_shared_mem->data(), msg_pointcloud->data.data(), total_pc_size);
+        
+        // Set frame_id to indicate shared memory usage and clear data to save bandwidth
+        msg_pointcloud->header.frame_id = std::string("--shm--") + _pc_shared_mem->name();
+        msg_pointcloud->data.clear();
     }
-    else if (_pc_shared_mem->size() < total_pc_size)
+    else
     {
-        // If the size of the pointcloud has changed and is larger than the shared memory, recreate it
-        _pc_shared_mem.reset();
-        std::cout << "Recreating PointCloud shared memory: " << pc_shm_name << " with new size " << total_pc_size << " bytes" << std::endl;
-        _pc_shared_mem = std::make_unique<SharedMem>(pc_shm_name.c_str(), total_pc_size, true);
+        msg_pointcloud->header.frame_id = frame_id;
     }
-    
-    // Copy data to shared memory
-    memcpy(_pc_shared_mem->data(), msg_pointcloud->data.data(), total_pc_size);
-    
-    // Set frame_id to indicate shared memory usage and clear data to save bandwidth
-    msg_pointcloud->header.frame_id = std::string("--shm--") + _pc_shared_mem->name();
-    msg_pointcloud->data.clear();
-    // }
-    // else
-    // {
-    //     msg_pointcloud->header.frame_id = frame_id;
-    // }
     
     if (!_ordered_pc)
     {
@@ -317,11 +340,9 @@ void PointcloudFilter::Publish(rs2::points pc, const rclcpp::Time& t, const rs2:
         msg_pointcloud->is_dense = true;
         modifier.resize(valid_count);
     }
-    {
-        std::lock_guard<std::mutex> lock_guard(_mutex_publisher);
-        if (_pointcloud_publisher)
-            _pointcloud_publisher->publish(std::move(msg_pointcloud));
-    }
+    
+    // Publish using the target publisher
+    target_publisher->publish(std::move(msg_pointcloud));
 }
 
 

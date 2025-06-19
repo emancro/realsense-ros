@@ -244,12 +244,10 @@ void BaseRealSenseNode::setupFilters()
 
 #if defined (ACCELERATE_GPU_WITH_GLSL)
     _colorizer_filter = std::make_shared<NamedFilter>(std::make_shared<rs2::gl::colorizer>(), _parameters, _logger); 
-    // _pc_filter = std::make_shared<PointcloudFilter>(std::make_shared<rs2::gl::pointcloud>(), _node, _parameters, _logger, false, _enable_shm);
-    _pc_filter = std::make_shared<PointcloudFilter>(std::make_shared<rs2::pointcloud>(), _node, _parameters, _logger, false);
+    _pc_filter = std::make_shared<PointcloudFilter>(std::make_shared<rs2::pointcloud>(), _node, _parameters, _logger, false, true);
 #else
     _colorizer_filter = std::make_shared<NamedFilter>(std::make_shared<rs2::colorizer>(), _parameters, _logger);
-    // _pc_filter = std::make_shared<PointcloudFilter>(std::make_shared<rs2::pointcloud>(), _node, _parameters, _logger, false, _enable_shm);
-    _pc_filter = std::make_shared<PointcloudFilter>(std::make_shared<rs2::pointcloud>(), _node, _parameters, _logger, false);
+    _pc_filter = std::make_shared<PointcloudFilter>(std::make_shared<rs2::pointcloud>(), _node, _parameters, _logger, false, true);
 #endif
 
     // Apply PointCloud filter before applying Align-depth as it requires original depth image not aligned-depth image.
@@ -582,7 +580,9 @@ void BaseRealSenseNode::frame_callback(rs2::frame frame)
             
             if (f.is<rs2::points>())
             {
-                publishPointCloud(f.as<rs2::points>(), t, frameset);
+                for (bool is_shm : {true, false}) {
+                    publishPointCloud(f.as<rs2::points>(), t, frameset, is_shm);
+                }
             }
             else
             {
@@ -855,11 +855,14 @@ void BaseRealSenseNode::SetBaseStream()
     _base_profile = available_profiles[*base_stream];
 }
 
-void BaseRealSenseNode::publishPointCloud(rs2::points pc, const rclcpp::Time& t, const rs2::frameset& frameset)
+void BaseRealSenseNode::publishPointCloud(rs2::points pc, const rclcpp::Time& t, const rs2::frameset& frameset, bool is_shm)
 {
     std::string frame_id = OPTICAL_FRAME_ID(DEPTH);
-    _pc_filter->Publish(pc, t, frameset, frame_id);
+    
+    // Publish to both regular and shared memory topics when there are subscribers
+    _pc_filter->Publish(pc, t, frameset, frame_id, is_shm);
 }
+
 
 
 Extrinsics BaseRealSenseNode::rsExtrinsicsToMsg(const rs2_extrinsics& extrinsics) const
