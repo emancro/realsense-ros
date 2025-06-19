@@ -74,6 +74,7 @@ using realsense2_camera_msgs::msg::RGBD;
 namespace realsense2_camera
 {
     typedef std::pair<rs2_stream, int> stream_index_pair;
+    typedef std::pair<stream_index_pair, bool> is_shm_stream_index_pair;
 
     class image_publisher; // forward declaration
 
@@ -238,9 +239,10 @@ namespace realsense2_camera
             rs2::frame f,
             const rclcpp::Time& t,
             const stream_index_pair& stream,
+            bool is_shm,
             std::map<stream_index_pair, cv::Mat>& images,
             const std::map<stream_index_pair, rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr>& info_publishers,
-            const std::map<stream_index_pair, std::shared_ptr<image_publisher>>& image_publishers,
+            const std::map<is_shm_stream_index_pair, std::shared_ptr<image_publisher>>& image_publishers,
             const bool is_publishMetadata = true);
 
         void publishRGBD(
@@ -307,7 +309,7 @@ namespace realsense2_camera
         std::shared_ptr<std::thread> _tf_t;
 
         bool _use_intra_process;      
-        std::map<stream_index_pair, std::shared_ptr<image_publisher>> _image_publishers;
+        std::map<is_shm_stream_index_pair, std::shared_ptr<image_publisher>> _image_publishers;
         
         std::map<stream_index_pair, rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr> _imu_publishers;
         std::shared_ptr<SyncedImuPublisher> _synced_imu_publisher;
@@ -342,14 +344,14 @@ namespace realsense2_camera
         std::vector<std::shared_ptr<NamedFilter>> _filters;
         std::vector<rs2::sensor> _dev_sensors;
         std::vector<std::unique_ptr<RosSensor>> _available_ros_sensors;
-        bool _enable_shm;
+        // bool _enable_shm;
 
         std::map<rs2_stream, std::shared_ptr<rs2::align>> _align;
 
         std::map<stream_index_pair, cv::Mat> _depth_aligned_image;
         std::map<stream_index_pair, cv::Mat> _depth_scaled_image;
         std::map<stream_index_pair, rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr> _depth_aligned_info_publisher;
-        std::map<stream_index_pair, std::shared_ptr<image_publisher>> _depth_aligned_image_publishers;
+        std::map<is_shm_stream_index_pair, std::shared_ptr<image_publisher>> _depth_aligned_image_publishers;
         std::map<std::string, rs2::region_of_interest> _auto_exposure_roi;
         std::map<rs2_stream, bool> _is_first_frame;
 

@@ -78,7 +78,7 @@ configurable_parameters = [{'name': 'camera_name',                  'default': '
                            {'name': 'pointcloud.stream_index_filter','default': '0', 'description': 'texture stream index for pointcloud'},
                            {'name': 'pointcloud.ordered_pc',        'default': 'false', 'description': ''},
                            {'name': 'pointcloud.allow_no_texture_points', 'default': 'false', 'description': "''"},
-                           {'name': 'align_depth.enable',           'default': 'false', 'description': 'enable align depth filter'},
+                           {'name': 'align_depth.enable',           'default': 'true', 'description': 'enable align depth filter'},
                            {'name': 'colorizer.enable',             'default': 'false', 'description': 'enable colorizer filter'},
                            {'name': 'decimation_filter.enable',     'default': 'false', 'description': 'enable_decimation_filter'},
                            {'name': 'rotation_filter.enable',       'default': 'false', 'description': 'enable rotation_filter'},
@@ -91,7 +91,6 @@ configurable_parameters = [{'name': 'camera_name',                  'default': '
                            {'name': 'wait_for_device_timeout',      'default': '-1.', 'description': 'Timeout for waiting for device to connect (Seconds)'},
                            {'name': 'reconnect_timeout',            'default': '6.', 'description': 'Timeout(seconds) between consequtive reconnection attempts'},
                            {'name': 'base_frame_id',                'default': 'link', 'description': 'Root frame of the sensors transform tree'},
-                           {'name': 'enable_shm' ,                  'default': 'false', 'description': "'enable shared memory'"},
                           ]
 
 def declare_configurable_parameters(parameters):

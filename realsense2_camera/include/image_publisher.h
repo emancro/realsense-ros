@@ -50,15 +50,18 @@ public:
     image_transport_publisher( rclcpp::Node & node,
                                const std::string & topic_name,
                                const rmw_qos_profile_t & qos,
-                               bool enable_shm = false );
+                               bool is_shm = false );
     void publish( sensor_msgs::msg::Image::UniquePtr image_ptr ) override;
     size_t get_subscription_count() const override;
+    std::string get_name();
 
 private:
     std::shared_ptr< image_transport::Publisher > image_publisher_impl;
+    // std::shared_ptr< image_transport::Publisher > image_publisher_impl_shm;
     std::unique_ptr<SharedMem> img_shared_mem;
     std::unique_ptr<SharedMem> rw_shared_mem;
-    bool _enable_shm;
+    bool _is_shm;
+    std::string _topic_name;
 };
 
 }  // namespace realsense2_camera
