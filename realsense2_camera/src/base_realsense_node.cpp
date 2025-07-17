@@ -517,7 +517,63 @@ void BaseRealSenseNode::imu_callback(rs2::frame frame)
 
 bool BaseRealSenseNode::frameHasSubscriber(rs2::frame frame) {
     stream_index_pair sip(frame.get_profile().stream_type(), frame.get_profile().stream_index());
-    return 0 != _image_publishers[sip]->get_subscription_count();
+    
+    // Check if this is a point cloud frame
+    if (frame.is<rs2::points>()) {
+        // Point cloud subscribers are checked within PointcloudFilter::Publish()
+        // We return true if point cloud filter is enabled - let the filter decide if it has subscribers
+        return (_pc_filter && _pc_filter->is_enabled());
+    }
+    
+    // For image frames, check both SHM and regular image publishers
+    bool has_image_subscribers = false;
+    
+    // Check regular image publisher
+    is_shm_stream_index_pair regular_key{sip, false};
+    if (_image_publishers.find(regular_key) != _image_publishers.end()) {
+        has_image_subscribers |= (_image_publishers.at(regular_key)->get_subscription_count() > 0);
+    }
+    
+    // Check SHM image publisher  
+    is_shm_stream_index_pair shm_key{sip, true};
+    if (_image_publishers.find(shm_key) != _image_publishers.end()) {
+        has_image_subscribers |= (_image_publishers.at(shm_key)->get_subscription_count() > 0);
+    }
+    
+    // Check depth aligned image publishers for depth frames
+    // Note: aligned depth images are stored with COLOR stream type but published by _depth_aligned_image_publishers
+    bool has_depth_aligned_subscribers = false;
+    if (sip.first == RS2_STREAM_DEPTH) {
+        // Check regular depth aligned publisher (uses COLOR stream type for aligned depth)
+        is_shm_stream_index_pair regular_key{COLOR, false};
+        if (_depth_aligned_image_publishers.find(regular_key) != _depth_aligned_image_publishers.end()) {
+            has_depth_aligned_subscribers |= (_depth_aligned_image_publishers.at(regular_key)->get_subscription_count() > 0);
+        }
+        
+        // Check SHM depth aligned publisher (uses COLOR stream type for aligned depth)
+        is_shm_stream_index_pair shm_key{COLOR, true};
+        if (_depth_aligned_image_publishers.find(shm_key) != _depth_aligned_image_publishers.end()) {
+            has_depth_aligned_subscribers |= (_depth_aligned_image_publishers.at(shm_key)->get_subscription_count() > 0);
+        }
+    }
+    
+    // Check RGBD publisher for color/depth frames
+    bool has_rgbd_subscribers = false;
+    if (_rgbd_publisher && (sip.first == RS2_STREAM_COLOR || sip.first == RS2_STREAM_DEPTH)) {
+        has_rgbd_subscribers = (_rgbd_publisher->get_subscription_count() > 0);
+    }
+    
+    return has_image_subscribers || has_depth_aligned_subscribers || has_rgbd_subscribers;
+}
+
+bool BaseRealSenseNode::frameHasSubscriber(rs2::frameset frameset) {
+    // For frameset, check if ANY frame within it has subscribers
+    for (auto it = frameset.begin(); it != frameset.end(); ++it) {
+        if (frameHasSubscriber(*it)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void BaseRealSenseNode::frame_callback(rs2::frame frame)
@@ -541,13 +597,15 @@ void BaseRealSenseNode::frame_callback(rs2::frame frame)
         ROS_DEBUG("Frameset arrived.");
         auto frameset = frame.as<rs2::frameset>();
         ROS_INFO("List of frameset before applying filters: size: %d", static_cast<int>(frameset.size()));
+        // Debug: Log frameset contents before applying filters
         for (auto it = frameset.begin(); it != frameset.end(); ++it)
         {
             auto f = (*it);
-            auto stream_type = f.get_profile().stream_type();
-            auto stream_index = f.get_profile().stream_index();
-            auto stream_format = f.get_profile().format();
-            auto stream_unique_id = f.get_profile().unique_id();
+            ROS_DEBUG("Frameset contains (%s, %d, %s %d) frame.",
+                     rs2_stream_to_string(f.get_profile().stream_type()),
+                     f.get_profile().stream_index(),
+                     rs2_format_to_string(f.get_profile().format()),
+                     f.get_profile().unique_id());
         }
         // Clip depth_frame for max range:
         rs2::depth_frame original_depth_frame = frameset.get_depth_frame();
@@ -654,10 +712,8 @@ void BaseRealSenseNode::frame_callback(rs2::frame frame)
             }
         }
      }
-        if (_synced_imu_publisher)
-            _synced_imu_publisher->Resume();
-        }
-    }
+     if (_synced_imu_publisher)
+        _synced_imu_publisher->Resume();
 } // frame_callback
 
 void BaseRealSenseNode::multiple_message_callback(rs2::frame frame, imu_sync_method sync_method)

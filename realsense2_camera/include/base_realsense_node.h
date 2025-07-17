@@ -204,6 +204,7 @@ namespace realsense2_camera
         void setupFilters();
         bool setBaseTime(double frame_time, rs2_timestamp_domain time_domain);
         bool frameHasSubscriber(rs2::frame frame);
+        bool frameHasSubscriber(rs2::frameset frameset);
 
         uint64_t millisecondsToNanoseconds(double timestamp_ms);
         rclcpp::Time frameSystemTimeSec(rs2::frame frame);
