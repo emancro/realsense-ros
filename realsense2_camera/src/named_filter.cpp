@@ -127,10 +127,21 @@ void PointcloudFilter::setPublisher()
         _pointcloud_publisher = _node.create_publisher<sensor_msgs::msg::PointCloud2>("~/depth/color/points",
                                 rclcpp::QoS(rclcpp::QoSInitialization::from_rmw(qos_string_to_qos(_pointcloud_qos)),
                                             qos_string_to_qos(_pointcloud_qos)));
+        
+        // if (_enable_shm)
+        // {
+        _pointcloud_publisher_shm = _node.create_publisher<sensor_msgs::msg::PointCloud2>("~/depth/color/points_shm",
+                                rclcpp::QoS(rclcpp::QoSInitialization::from_rmw(qos_string_to_qos(_pointcloud_qos)),
+                                            qos_string_to_qos(_pointcloud_qos)));
+        // }
     }
     else if ((!_is_enabled) && (_pointcloud_publisher))
     {
         _pointcloud_publisher.reset();
+        // if (_pointcloud_publisher_shm)
+        // {
+        _pointcloud_publisher_shm.reset();
+        // }
     }
 }
 
@@ -143,12 +154,25 @@ void reverse_memcpy(unsigned char* dst, const unsigned char* src, size_t n)
 
 }
 
-void PointcloudFilter::Publish(rs2::points pc, const rclcpp::Time& t, const rs2::frameset& frameset, const std::string& frame_id)
+void PointcloudFilter::Publish(rs2::points pc, const rclcpp::Time& t, const rs2::frameset& frameset, const std::string& frame_id, bool is_shm)
 {
+    std::lock_guard<std::mutex> lock_guard(_mutex_publisher);
+    
+    // Check which publisher to use and if it has subscribers
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr target_publisher;
+    if (is_shm)
     {
-        std::lock_guard<std::mutex> lock_guard(_mutex_publisher);
-        if ((!_pointcloud_publisher) || (!(_pointcloud_publisher->get_subscription_count())))
-            return;
+        target_publisher = _pointcloud_publisher_shm;
+    }
+    else
+    {
+        target_publisher = _pointcloud_publisher;
+    }
+    
+    if (!target_publisher || !target_publisher->get_subscription_count())
+        return;
+
+    {
     }
     rs2_stream texture_source_id = static_cast<rs2_stream>(_filter->get_option(rs2_option::RS2_OPTION_STREAM_FILTER));
     bool use_texture = texture_source_id != RS2_STREAM_ANY;
@@ -276,8 +300,7 @@ void PointcloudFilter::Publish(rs2::points pc, const rclcpp::Time& t, const rs2:
     }
     msg_pointcloud->header.stamp = t;
     
-    // Use shared memory if enabled
-    if (_enable_shm)
+    if (is_shm)
     {
         std::string pc_shm_name = "pc_" + frame_id.substr(frame_id.find_last_of('/') + 1);  // Extract camera name from frame_id
         
@@ -317,11 +340,9 @@ void PointcloudFilter::Publish(rs2::points pc, const rclcpp::Time& t, const rs2:
         msg_pointcloud->is_dense = true;
         modifier.resize(valid_count);
     }
-    {
-        std::lock_guard<std::mutex> lock_guard(_mutex_publisher);
-        if (_pointcloud_publisher)
-            _pointcloud_publisher->publish(std::move(msg_pointcloud));
-    }
+    
+    // Publish using the target publisher
+    target_publisher->publish(std::move(msg_pointcloud));
 }
 
 

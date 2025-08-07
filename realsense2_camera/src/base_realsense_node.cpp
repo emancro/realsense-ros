@@ -118,8 +118,7 @@ BaseRealSenseNode::BaseRealSenseNode(rclcpp::Node& node,
     _pointcloud(false),
     _imu_sync_method(imu_sync_method::NONE),
     _is_profile_changed(false),
-    _is_align_depth_changed(false),
-    _enable_shm(false)
+    _is_align_depth_changed(false)
 #if defined (ACCELERATE_GPU_WITH_GLSL)
     ,_app(1280, 720, "RS_GLFW_Window"),
     _accelerate_gpu_with_glsl(false),
@@ -245,10 +244,10 @@ void BaseRealSenseNode::setupFilters()
 
 #if defined (ACCELERATE_GPU_WITH_GLSL)
     _colorizer_filter = std::make_shared<NamedFilter>(std::make_shared<rs2::gl::colorizer>(), _parameters, _logger); 
-    _pc_filter = std::make_shared<PointcloudFilter>(std::make_shared<rs2::gl::pointcloud>(), _node, _parameters, _logger, false, _enable_shm);
+    _pc_filter = std::make_shared<PointcloudFilter>(std::make_shared<rs2::pointcloud>(), _node, _parameters, _logger, false, true);
 #else
     _colorizer_filter = std::make_shared<NamedFilter>(std::make_shared<rs2::colorizer>(), _parameters, _logger);
-    _pc_filter = std::make_shared<PointcloudFilter>(std::make_shared<rs2::pointcloud>(), _node, _parameters, _logger, false, _enable_shm);
+    _pc_filter = std::make_shared<PointcloudFilter>(std::make_shared<rs2::pointcloud>(), _node, _parameters, _logger, false, true);
 #endif
 
     // Apply PointCloud filter before applying Align-depth as it requires original depth image not aligned-depth image.
@@ -578,35 +577,45 @@ void BaseRealSenseNode::frame_callback(rs2::frame frame)
                 rs2_stream_to_string(stream_type), stream_index, rs2_format_to_string(stream_format), f.get_frame_number(), frame_time, t.nanoseconds());
             if (f.is<rs2::video_frame>())
                 ROS_DEBUG_STREAM("frame: " << f.as<rs2::video_frame>().get_width() << " x " << f.as<rs2::video_frame>().get_height());
-
+            
             if (f.is<rs2::points>())
             {
-                publishPointCloud(f.as<rs2::points>(), t, frameset);
+                for (bool is_shm : {true, false}) {
+                    publishPointCloud(f.as<rs2::points>(), t, frameset, is_shm);
+                }
             }
             else
             {
-                if (stream_type == RS2_STREAM_DEPTH)
-                {
-                    if (sent_depth_frame) continue;
-                    sent_depth_frame = true;
-                    if (original_color_frame && _align_depth_filter->is_enabled())
+                
+                for (bool is_shm : {true, false}) {
+                    if (stream_type == RS2_STREAM_DEPTH)
                     {
-                        publishFrame(f, t, COLOR, _depth_aligned_image, _depth_aligned_info_publisher, _depth_aligned_image_publishers, false);
-                        continue;
+                        if (original_color_frame && _align_depth_filter->is_enabled())
+                        {
+                            publishFrame(f, t, COLOR, is_shm, _depth_aligned_image, _depth_aligned_info_publisher, _depth_aligned_image_publishers, false);
+                            if (!sent_depth_frame) {
+                                sent_depth_frame = true;
+                            }
+                            continue;
+                        }
+                        if (sent_depth_frame) continue;
+                        sent_depth_frame = true;
                     }
+                    publishFrame(f, t, sip,  is_shm, _images, _info_publishers, _image_publishers);
                 }
-                publishFrame(f, t, sip, _images, _info_publishers, _image_publishers);
             }
         }
         if (original_depth_frame && _align_depth_filter->is_enabled())
         {
-            rs2::frame frame_to_send;
-            if (_colorizer_filter->is_enabled())
-                frame_to_send = _colorizer_filter->Process(original_depth_frame);
-            else
-                frame_to_send = original_depth_frame;
-            publishFrame(frame_to_send, t, DEPTH, _images, _info_publishers, _image_publishers);
 
+            for (bool is_shm : {true, false}) {
+                rs2::frame frame_to_send;
+                if (_colorizer_filter->is_enabled())
+                    frame_to_send = _colorizer_filter->Process(original_depth_frame);
+                else
+                    frame_to_send = original_depth_frame;
+                publishFrame(frame_to_send, t, DEPTH, is_shm,_images, _info_publishers, _image_publishers);
+            }
             // Publish RGBD only if rgbd enabled and both depth and color frames exist.
             // On this line we already know original_depth_frame is valid.
             if(_enable_rgbd && original_color_frame)
@@ -625,14 +634,17 @@ void BaseRealSenseNode::frame_callback(rs2::frame frame)
                     rs2_stream_to_string(stream_type), stream_index, frame.get_frame_number(), frame_time, t.nanoseconds());
             
         stream_index_pair sip{stream_type,stream_index};
-        if (frame.is<rs2::depth_frame>())
-        {
-            if (_clipping_distance > 0)
+
+        for (bool is_shm : {true, false}) {
+            if (frame.is<rs2::depth_frame>())
             {
-                clip_depth(frame, _clipping_distance);
+                if (_clipping_distance > 0)
+                {
+                    clip_depth(frame, _clipping_distance);
+                }
             }
+            publishFrame(frame, t, sip, is_shm, _images, _info_publishers, _image_publishers);
         }
-        publishFrame(frame, t, sip, _images, _info_publishers, _image_publishers);
      }
      if (_synced_imu_publisher)
         _synced_imu_publisher->Resume();
@@ -843,11 +855,14 @@ void BaseRealSenseNode::SetBaseStream()
     _base_profile = available_profiles[*base_stream];
 }
 
-void BaseRealSenseNode::publishPointCloud(rs2::points pc, const rclcpp::Time& t, const rs2::frameset& frameset)
+void BaseRealSenseNode::publishPointCloud(rs2::points pc, const rclcpp::Time& t, const rs2::frameset& frameset, bool is_shm)
 {
     std::string frame_id = OPTICAL_FRAME_ID(DEPTH);
-    _pc_filter->Publish(pc, t, frameset, frame_id);
+    
+    // Publish to both regular and shared memory topics when there are subscribers
+    _pc_filter->Publish(pc, t, frameset, frame_id, is_shm);
 }
+
 
 
 Extrinsics BaseRealSenseNode::rsExtrinsicsToMsg(const rs2_extrinsics& extrinsics) const
@@ -963,12 +978,14 @@ void BaseRealSenseNode::publishFrame(
     rs2::frame f,
     const rclcpp::Time& t,
     const stream_index_pair& stream,
+    bool is_shm,
     std::map<stream_index_pair, cv::Mat>& images,
     const std::map<stream_index_pair, rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr>& info_publishers,
-    const std::map<stream_index_pair, std::shared_ptr<image_publisher>>& image_publishers,
+    const std::map<is_shm_stream_index_pair, std::shared_ptr<image_publisher>>& image_publishers,
     const bool is_publishMetadata)
 {
-    ROS_DEBUG("publishFrame(...)");
+
+    // std::cout << "publishFrame(...) stream_index_pair: (" /**<< stream.first.stream_name().c_str() **/ << ", " << stream.second << ")" << "is_shm"  << int(is_shm) << std::endl;
     unsigned int width = 0;
     unsigned int height = 0;
     auto stream_format = RS2_FORMAT_ANY;
@@ -985,12 +1002,24 @@ void BaseRealSenseNode::publishFrame(
         return;
     }
 
+    is_shm_stream_index_pair image_pub_key{stream, is_shm};
+    
+    // Debug: Print what we're looking for
+    // std::cout << "Looking for publisher with stream: (" << int(stream.first) << ", " << stream.second << "), is_shm: " << is_shm << std::endl;
+    
     // Publish stream image
-    if (image_publishers.find(stream) != image_publishers.end())
+    if (image_publishers.find(image_pub_key) != image_publishers.end())
     {
-        auto &image_publisher = image_publishers.at(stream);
+        auto &image_publisher = image_publishers.at(image_pub_key);
         cv::Mat image_cv_matrix;
-
+        // if (auto rcl_publisher = dynamic_cast<realsense2_camera::image_rcl_publisher*>(image_publisher.get())) {
+        //     std::cout << "publisher1 is an image_rcl_publisher." << std::endl;
+        //     // You can now safely use rcl_publisher here
+        // } else if (auto transport_publisher = dynamic_cast<realsense2_camera::image_transport_publisher*>(image_publisher.get())) {
+        //     std::cout << "publisher1 is an image_transport_publisher: " << transport_publisher->get_name() << std::endl;
+        // } else {
+        //     std::cout << "publisher1 is an unknown type of image_publisher." << std::endl;
+        // }
         // if rgbd has subscribers we fetch the CV image here
         if (_rgbd_publisher && 0 != _rgbd_publisher->get_subscription_count())
         {
@@ -1025,7 +1054,7 @@ void BaseRealSenseNode::publishFrame(
                 sensor_msgs::msg::Image *msg_address = img_msg_ptr.get();
                 image_publisher->publish(std::move(img_msg_ptr));
 
-                ROS_DEBUG_STREAM(rs2_stream_to_string(f.get_profile().stream_type()) << " stream published, message address: " << std::hex << msg_address);
+                std::cout << rs2_stream_to_string(f.get_profile().stream_type()) << " stream published, message address: " << std::hex << msg_address << std::endl;
             }
             else
             {

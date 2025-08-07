@@ -189,11 +189,16 @@ void BaseRealSenseNode::stopPublishers(const std::vector<stream_profile>& profil
     for (auto& profile : profiles)
     {
         stream_index_pair sip(profile.stream_type(), profile.stream_index());
+
         if (profile.is<rs2::video_stream_profile>())
         {
-            _image_publishers.erase(sip);
+
+            for (bool is_shm : {true, false}) {
+                is_shm_stream_index_pair key{sip, is_shm};
+                _image_publishers.erase(key);
+                _depth_aligned_image_publishers.erase(key);
+            }
             _info_publishers.erase(sip);
-            _depth_aligned_image_publishers.erase(sip);
             _depth_aligned_info_publisher.erase(sip);
         }
         else if (profile.is<rs2::motion_stream_profile>())
@@ -227,58 +232,69 @@ void BaseRealSenseNode::startPublishers(const std::vector<stream_profile>& profi
 
         if (profile.is<rs2::video_stream_profile>())
         {
-            if(profile.stream_type() == RS2_STREAM_COLOR)
-                _is_color_enabled = true;
-            else if (profile.stream_type() == RS2_STREAM_DEPTH)
-                _is_depth_enabled = true;
-            std::stringstream image_raw, camera_info;
-            bool rectified_image = false;
-            if (sensor.rs2::sensor::is<rs2::depth_sensor>())
-                rectified_image = true;
 
-            // adding "~/" to the topic name will add node namespace and node name to the topic
-            // see "Private Namespace Substitution Character" section on https://design.ros2.org/articles/topic_and_service_names.html
-            image_raw << "~/" << stream_name << "/image_" << ((rectified_image)?"rect_":"") << "raw";
-            camera_info << "~/" << stream_name << "/camera_info";
+            for (bool is_shm : {true, false}) {
+                is_shm_stream_index_pair key{sip, is_shm};
+                if(profile.stream_type() == RS2_STREAM_COLOR)
+                    _is_color_enabled = true;
+                else if (profile.stream_type() == RS2_STREAM_DEPTH)
+                    _is_depth_enabled = true;
+                std::stringstream image_raw, camera_info;
+                bool rectified_image = false;
+                if (sensor.rs2::sensor::is<rs2::depth_sensor>())
+                    rectified_image = true;
 
-            // We can use 2 types of publishers:
-            // Native RCL publisher that support intra-process zero-copy comunication
-            // image-transport package publisher that adds a commpressed image topic if package is found installed
-            if (_use_intra_process)
-            {
-                _image_publishers[sip] = std::make_shared<image_rcl_publisher>(_node, image_raw.str(), qos);
-            }
-            else
-            {
-                _image_publishers[sip] = std::make_shared<image_transport_publisher>(_node, image_raw.str(), qos, _enable_shm);
-                ROS_DEBUG_STREAM("image transport publisher was created for topic" << image_raw.str());
-            }
-
-            _info_publishers[sip] = _node.create_publisher<sensor_msgs::msg::CameraInfo>(camera_info.str(),
-                                    rclcpp::QoS(rclcpp::QoSInitialization::from_rmw(info_qos), info_qos));
-
-            if (_align_depth_filter->is_enabled() && (sip != DEPTH) && sip.second < 2)
-            {
-                std::stringstream aligned_image_raw, aligned_camera_info;
-                aligned_image_raw << "~/" << "aligned_depth_to_" << stream_name << "/image_raw";
-                aligned_camera_info << "~/" << "aligned_depth_to_" << stream_name << "/camera_info";
-
-                std::string aligned_stream_name = "aligned_depth_to_" + stream_name;
+                // adding "~/" to the topic name will add node namespace and node name to the topic
+                // see "Private Namespace Substitution Character" section on https://design.ros2.org/articles/topic_and_service_names.html
+                image_raw << "~/" << stream_name << "/image_" << ((rectified_image)?"rect_":"") << "raw";
+                camera_info << "~/" << stream_name << "/camera_info";
 
                 // We can use 2 types of publishers:
                 // Native RCL publisher that support intra-process zero-copy comunication
-                // image-transport package publisher that add's a commpressed image topic if the package is installed
+                // image-transport package publisher that adds a commpressed image topic if package is found installed
+                std::string topic_name = image_raw.str() + (is_shm ? "_shm" : "");
                 if (_use_intra_process)
                 {
-                    _depth_aligned_image_publishers[sip] = std::make_shared<image_rcl_publisher>(_node, aligned_image_raw.str(), qos);
+                    _image_publishers[key] = std::make_shared<image_rcl_publisher>(_node, topic_name, qos);
                 }
                 else
                 {
-                    _depth_aligned_image_publishers[sip] = std::make_shared<image_transport_publisher>(_node, aligned_image_raw.str(), qos, _enable_shm);
-                    ROS_DEBUG_STREAM("image transport publisher was created for topic" << image_raw.str());
+                    _image_publishers[key] = std::make_shared<image_transport_publisher>(_node, topic_name, qos, is_shm);
+                    // }
                 }
-                _depth_aligned_info_publisher[sip] = _node.create_publisher<sensor_msgs::msg::CameraInfo>(aligned_camera_info.str(),
-                    rclcpp::QoS(rclcpp::QoSInitialization::from_rmw(info_qos), info_qos));
+
+                _info_publishers[sip] = _node.create_publisher<sensor_msgs::msg::CameraInfo>(camera_info.str(),
+                                        rclcpp::QoS(rclcpp::QoSInitialization::from_rmw(info_qos), info_qos));
+
+                if (_align_depth_filter->is_enabled() && (sip != DEPTH) && sip.second < 2)
+                {
+                    std::stringstream aligned_image_raw, aligned_camera_info;
+                    aligned_image_raw << "~/" << "aligned_depth_to_" << stream_name << "/image_raw";
+                    aligned_camera_info << "~/" << "aligned_depth_to_" << stream_name << "/camera_info";
+
+                    std::string aligned_stream_name = "aligned_depth_to_" + stream_name;
+
+                    // We can use 2 types of publishers:
+                    // Native RCL publisher that support intra-process zero-copy comunication
+                    // image-transport package publisher that add's a commpressed image topic if the package is installed
+                    std::string aligned_topic_name = aligned_image_raw.str() + (is_shm ? "_shm" : "");
+                    
+                    // Debug: Print what key we're creating
+                    // std::cout << "Creating aligned depth publisher with key: (" << int(sip.first) << ", " << sip.second << "), is_shm: " << is_shm << " for topic: " << aligned_topic_name << std::endl;
+                    
+                    if (_use_intra_process)
+                    {
+                        _depth_aligned_image_publishers[key] = std::make_shared<image_rcl_publisher>(_node, aligned_topic_name, qos);
+                    }
+                    else
+                    {
+                        _depth_aligned_image_publishers[key] = std::make_shared<image_transport_publisher>(_node, aligned_topic_name, qos, is_shm);
+
+                        ROS_DEBUG_STREAM("image transport publisher was created for topic" << image_raw.str());
+                    }
+                    _depth_aligned_info_publisher[sip] = _node.create_publisher<sensor_msgs::msg::CameraInfo>(aligned_camera_info.str(),
+                        rclcpp::QoS(rclcpp::QoSInitialization::from_rmw(info_qos), info_qos));
+                }
             }
         }
         else if (profile.is<rs2::motion_stream_profile>())

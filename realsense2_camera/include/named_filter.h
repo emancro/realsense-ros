@@ -55,7 +55,7 @@ namespace realsense2_camera
             PointcloudFilter(std::shared_ptr<rs2::filter> filter, rclcpp::Node& node, std::shared_ptr<Parameters> parameters, rclcpp::Logger logger, bool is_enabled=false, bool enable_shm=false);
         
             void setPublisher();
-            void Publish(rs2::points pc, const rclcpp::Time& t, const rs2::frameset& frameset, const std::string& frame_id);
+            void Publish(rs2::points pc, const rclcpp::Time& t, const rs2::frameset& frameset, const std::string& frame_id, bool is_shm);
 
         private:
             void setParameters();
@@ -67,6 +67,7 @@ namespace realsense2_camera
             bool _ordered_pc;
             std::mutex _mutex_publisher;
             rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr _pointcloud_publisher;
+            rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr _pointcloud_publisher_shm;
             std::string _pointcloud_qos;
             bool _enable_shm;
             std::unique_ptr<SharedMem> _pc_shared_mem;
