@@ -193,7 +193,7 @@ void BaseRealSenseNode::stopPublishers(const std::vector<stream_profile>& profil
         if (profile.is<rs2::video_stream_profile>())
         {
 
-            for (bool is_shm : {true, false}) {
+            for (bool is_shm : {true}) {
                 is_shm_stream_index_pair key{sip, is_shm};
                 _image_publishers.erase(key);
                 _depth_aligned_image_publishers.erase(key);
@@ -233,7 +233,7 @@ void BaseRealSenseNode::startPublishers(const std::vector<stream_profile>& profi
         if (profile.is<rs2::video_stream_profile>())
         {
 
-            for (bool is_shm : {true, false}) {
+            for (bool is_shm : {true}) {
                 is_shm_stream_index_pair key{sip, is_shm};
                 if(profile.stream_type() == RS2_STREAM_COLOR)
                     _is_color_enabled = true;
